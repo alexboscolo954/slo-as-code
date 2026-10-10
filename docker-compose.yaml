@@ -1,0 +1,19 @@
+services:
+  app:
+    build: demo
+    command: [serve]
+  load:
+    build: demo
+    command: [load, "http://app:8080", "40"]
+    depends_on: [app]
+  prometheus:
+    image: prom/prometheus:v3.15.0
+    volumes:
+      - ./demo/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./rules:/etc/prometheus/rules:ro
+    ports: ["9090:9090"]
+  alertmanager:
+    image: prom/alertmanager:v0.34.1
+    volumes:
+      - ./demo/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+    ports: ["9093:9093"]

@@ -1,0 +1,23 @@
+# Page vs ticket routing on the severity label the SLO alerts carry.
+# Receivers are empty here; in production, page -> PagerDuty/Opsgenie and
+# ticket -> Slack/Jira. Another option for page: aiops-sre-agent
+# (github.com/alexboscolo954/aiops-sre-agent) as an extra webhook receiver.
+route:
+  receiver: tickets
+  group_by: [alertname, sloth_service, sloth_slo]
+  group_wait: 10s
+  routes:
+    - matchers: ['severity="page"']
+      receiver: pager
+      repeat_interval: 1h
+    - matchers: ['severity="ticket"']
+      receiver: tickets
+      repeat_interval: 12h
+inhibit_rules:
+  # A page already covers the same SLO: don't also open a ticket for it.
+  - source_matchers: ['severity="page"']
+    target_matchers: ['severity="ticket"']
+    equal: [sloth_id]
+receivers:
+  - name: pager
+  - name: tickets

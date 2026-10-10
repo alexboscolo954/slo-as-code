@@ -1,0 +1,142 @@
+# promtool unit tests for the generated SLO alerts (rules/checkout.yaml).
+# Traffic is 1000 requests/minute; series step is 1m. Budgets: availability
+# 0.1% errors, latency 1% slow. Burn-rate thresholds come from the rules:
+#   page:   5m & 1h > 14.4x   or   30m & 6h > 6x
+#   ticket: 2h & 1d > 3x      or   6h  & 3d > 1x
+# Expected values are worked out in the comments; promtool checks them.
+
+rule_files:
+  - ../rules/checkout.yaml
+
+evaluation_interval: 1m
+
+tests:
+  # 1. Healthy: 0.05% errors (half the budget) for a day. Nothing fires.
+  - name: healthy traffic stays quiet
+    interval: 1m
+    input_series:
+      - series: 'http_requests_total{job="checkout",code="200"}'
+        values: '0+1000x1500'
+      - series: 'http_requests_total{job="checkout",code="500"}'
+        values: '0+0.5x1500'
+    alert_rule_test:
+      - eval_time: 1d
+        alertname: CheckoutAvailabilityBudgetBurn
+        exp_alerts: []
+      - eval_time: 1d
+        alertname: CheckoutLatencyBudgetBurn
+        exp_alerts: []
+
+  # 2. Fast burn: a clean day, then 2% errors (20x budget).
+  #    +10m: 1h window = 2% * 10/60 = 0.33%  -> below 1.44%, no page yet.
+  #    +55m: 1h window = 2% * 55/60 = 1.83%  -> page. Ticket needs 1d > 0.3%
+  #          (it is 2%*55/1440 = 0.08%) or 3d > 0.1% (0.07%): no ticket yet.
+  #    errors stop at +60m. +70m: 5m window = 0 and 6h window = 0.33% < 0.6%,
+  #          so the page resolves: the short window does its job.
+  - name: fast burn pages within the hour, then resolves
+    interval: 1m
+    input_series:
+      - series: 'http_requests_total{job="checkout",code="200"}'
+        values: '0+1000x1600'
+      - series: 'http_requests_total{job="checkout",code="500"}'
+        values: '0x1440 0+20x60 1200x100'
+    alert_rule_test:
+      - eval_time: 1d10m
+        alertname: CheckoutAvailabilityBudgetBurn
+        exp_alerts: []
+      - eval_time: 1d55m
+        alertname: CheckoutAvailabilityBudgetBurn
+        exp_alerts:
+          - exp_labels:
+              category: availability
+              owner: payments-team
+              severity: page
+              sloth_id: checkout-requests-availability
+              sloth_service: checkout
+              sloth_severity: page
+              sloth_slo: requests-availability
+              tier: "1"
+            exp_annotations:
+              runbook: https://github.com/alexboscolo954/slo-as-code/blob/main/docs/runbook-budget-burn.md
+              summary: Checkout is burning its availability error budget
+              title: (page) checkout requests-availability SLO error budget burn rate is too fast.
+      - eval_time: 1d1h10m
+        alertname: CheckoutAvailabilityBudgetBurn
+        exp_alerts: []
+
+  # 3. Slow burn: a clean day, then 0.5% errors (5x budget) that never stop.
+  #    Never pages: 1h stays at 0.5% < 1.44%, 6h at 0.5% < 0.6%.
+  #    Ticket via 6h & 3d > 0.1%: 3d window = 0.5% * x / (1440 + x),
+  #    above 0.1% once x > 360m. +5h: 0.086% (quiet); +7h: 0.113% (ticket).
+  - name: slow burn opens a ticket and never pages
+    interval: 1m
+    input_series:
+      - series: 'http_requests_total{job="checkout",code="200"}'
+        values: '0+1000x1900'
+      - series: 'http_requests_total{job="checkout",code="500"}'
+        values: '0x1440 0+5x460'
+    alert_rule_test:
+      - eval_time: 1d5h
+        alertname: CheckoutAvailabilityBudgetBurn
+        exp_alerts: []
+      - eval_time: 1d7h
+        alertname: CheckoutAvailabilityBudgetBurn
+        exp_alerts:
+          - exp_labels:
+              category: availability
+              owner: payments-team
+              severity: ticket
+              sloth_id: checkout-requests-availability
+              sloth_service: checkout
+              sloth_severity: ticket
+              sloth_slo: requests-availability
+              tier: "1"
+            exp_annotations:
+              runbook: https://github.com/alexboscolo954/slo-as-code/blob/main/docs/runbook-budget-burn.md
+              summary: Checkout is burning its availability error budget
+              title: (ticket) checkout requests-availability SLO error budget burn rate is too fast.
+
+  # 4. No traffic: every ratio is 0/0 = NaN, and NaN > x is false. No alert,
+  #    which also means burn-rate alerts are blind on idle services (see README).
+  - name: zero traffic never alerts
+    interval: 1m
+    input_series:
+      - series: 'http_requests_total{job="checkout",code="200"}'
+        values: '0x200'
+      - series: 'http_requests_total{job="checkout",code="500"}'
+        values: '0x200'
+    alert_rule_test:
+      - eval_time: 3h
+        alertname: CheckoutAvailabilityBudgetBurn
+        exp_alerts: []
+    promql_expr_test:
+      - expr: slo:sli_error:ratio_rate5m{sloth_slo="requests-availability"} > -1
+        eval_time: 3h
+        exp_samples: []
+
+  # 5. Latency: a clean day, then 20% of requests slower than 250ms (20x the 1% budget).
+  #    +55m: 1h window = 20% * 55/60 = 18.3% > 14.4% -> page.
+  - name: latency fast burn pages
+    interval: 1m
+    input_series:
+      - series: 'http_request_duration_seconds_count{job="checkout"}'
+        values: '0+1000x1600'
+      - series: 'http_request_duration_seconds_bucket{job="checkout",le="0.25"}'
+        values: '0+1000x1440 1441000+800x100'
+    alert_rule_test:
+      - eval_time: 1d55m
+        alertname: CheckoutLatencyBudgetBurn
+        exp_alerts:
+          - exp_labels:
+              category: latency
+              owner: payments-team
+              severity: page
+              sloth_id: checkout-requests-latency
+              sloth_service: checkout
+              sloth_severity: page
+              sloth_slo: requests-latency
+              tier: "1"
+            exp_annotations:
+              runbook: https://github.com/alexboscolo954/slo-as-code/blob/main/docs/runbook-budget-burn.md
+              summary: Checkout is burning its latency error budget
+              title: (page) checkout requests-latency SLO error budget burn rate is too fast.

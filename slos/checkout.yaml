@@ -1,0 +1,56 @@
+# SLOs for the demo "checkout" service (demo/app.py), in Sloth's prometheus/v1 spec.
+# `make generate` turns this into Prometheus recording + multiwindow burn-rate alert rules.
+version: "prometheus/v1"
+service: "checkout"
+labels:
+  owner: "payments-team"
+  tier: "1"
+slos:
+  # 1 failed request in 1000 is within budget: about 43 minutes of full outage per 30 days.
+  - name: "requests-availability"
+    objective: 99.9
+    description: "Checkout API answers without a server error."
+    sli:
+      events:
+        error_query: sum(rate(http_requests_total{job="checkout",code=~"5.."}[{{.window}}]))
+        total_query: sum(rate(http_requests_total{job="checkout"}[{{.window}}]))
+    alerting:
+      name: CheckoutAvailabilityBudgetBurn
+      labels:
+        category: "availability"
+      annotations:
+        summary: "Checkout is burning its availability error budget"
+        runbook: "https://github.com/alexboscolo954/slo-as-code/blob/main/docs/runbook-budget-burn.md"
+      page_alert:
+        labels:
+          severity: page
+      ticket_alert:
+        labels:
+          severity: ticket
+
+  # 99% of requests faster than 250ms (the 0.25 histogram bucket).
+  - name: "requests-latency"
+    objective: 99
+    description: "Checkout API answers within 250ms."
+    sli:
+      events:
+        error_query: |
+          (
+            sum(rate(http_request_duration_seconds_count{job="checkout"}[{{.window}}]))
+            -
+            sum(rate(http_request_duration_seconds_bucket{job="checkout",le="0.25"}[{{.window}}]))
+          )
+        total_query: sum(rate(http_request_duration_seconds_count{job="checkout"}[{{.window}}]))
+    alerting:
+      name: CheckoutLatencyBudgetBurn
+      labels:
+        category: "latency"
+      annotations:
+        summary: "Checkout is burning its latency error budget"
+        runbook: "https://github.com/alexboscolo954/slo-as-code/blob/main/docs/runbook-budget-burn.md"
+      page_alert:
+        labels:
+          severity: page
+      ticket_alert:
+        labels:
+          severity: ticket
