@@ -22,7 +22,7 @@ print(sum(1 for a in json.load(sys.stdin)
 }
 wait_for() {  # description, command printing a number, wanted, timeout seconds
   for _ in $(seq $(( $4 / 5 ))); do
-    [[ "$(eval "$2")" == "$3" ]] && { echo "ok: $1"; return; }
+    [[ "$(eval "$2" 2>/dev/null)" == "$3" ]] && { echo "ok: $1"; return; }  # not up yet = retry
     sleep 5
   done
   echo "FAIL: $1"; curl -s "$PROM/api/v1/alerts"; exit 1
